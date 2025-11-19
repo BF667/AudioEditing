@@ -38,9 +38,10 @@ if __name__ == "__main__":
     args.shift_x0_for_np = True
     args.sub_iters = None
 
+    # Input check
     if args.drift_start < args.drift_end:
         raise ValueError('Drift start must be greater than drift end')
-    
+
     set_reproducability(args.seed)
 
     args.extraction_path = args.extraction_path[:-3] if args.extraction_path.endswith('.pt') else args.extraction_path

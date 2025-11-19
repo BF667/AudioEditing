@@ -8,8 +8,11 @@ import torch
 import torchaudio
 import wandb
 from tqdm import tqdm
-from utils import set_reproducability, get_text_embeddings
+from utils import set_reproducability, get_text_embeddings, get_spec
 import gc
+import matplotlib.pyplot as plt
+
+HF_TOKEN = None  # Needed for stable audio open. You can leave None when not using it
 
 
 if __name__ == "__main__":
@@ -31,7 +34,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--wandb_name', type=str, default=None)
     parser.add_argument('--wandb_group', type=str, default=None)
-    parser.add_argument('--wandb_disable', action='store_true')
+    parser.add_argument('--wandb_disable', action='store_true', default=True)
 
     args = parser.parse_args()
     args.shift_x0_for_np = True
@@ -40,7 +43,7 @@ if __name__ == "__main__":
     # Input check
     if args.drift_start < args.drift_end:
         raise ValueError('Drift start must be greater than drift end')
-    
+
     set_reproducability(args.seed)
 
     args.extraction_path = args.extraction_path[:-3] if args.extraction_path.endswith('.pt') else args.extraction_path
@@ -68,8 +71,10 @@ if __name__ == "__main__":
     device = f"cuda:{args.device_num}"
     torch.cuda.set_device(args.device_num)
 
-    load_dict = torch.load(args.extraction_path + '.pt', map_location=device)
+    load_dict = torch.load(args.extraction_path + '.pt', map_location=device, weights_only=False)
     extraction_args = load_dict['args']
+    extra_info = load_dict['extra_info']
+    duration = load_dict['duration']
     eigdata = load_dict['eigdata']
 
     if args.rand_v:
@@ -95,14 +100,15 @@ if __name__ == "__main__":
 
     ldm_stable = load_model(extraction_args.model_id, device,
                             extraction_args.num_diffusion_steps,
-                            extraction_args.double_precision)
+                            extraction_args.double_precision, token=HF_TOKEN)
+    sr = ldm_stable.get_sr()
     timesteps = ldm_stable.model.scheduler.timesteps
 
     drifts_path = args.extraction_path + '_driftgens'
     os.makedirs(drifts_path, exist_ok=True)
 
     text_embeddings_class_labels, text_emb, uncond_emb = get_text_embeddings(
-        extraction_args.target_prompt, extraction_args.target_neg_prompt, ldm_stable)
+        extraction_args.source_prompt, extraction_args.target_neg_prompt, ldm_stable)
 
     # Set mask
     if args.fix_alpha is not None:
@@ -136,7 +142,9 @@ if __name__ == "__main__":
             parallel_xt = latents[0]
 
     if args.evals_pt is not None:
-        args.evals_pt = torch.load(args.evals_pt)
+        args.evals_pt = torch.load(args.evals_pt, weights_only=False)
+
+    ldm_stable.setup_extra_inputs(xt, extra_info=extra_info, init_timestep=timesteps[0], audio_end_in_s=duration)
 
     for it, t in tqdm(enumerate(timesteps), total=(len(timesteps))):
         xt_m1, x0_pred = forward_directional(ldm_stable, xt, t, latents[it+1], uncond_emb, text_emb,
@@ -195,18 +203,34 @@ if __name__ == "__main__":
     gc.collect()
     torch.cuda.empty_cache()
 
+    # Decode
     with inference_mode():
         with torch.no_grad():
             x0_dec = []
             for i in range(len(xt)):
                 x0_dec.append(ldm_stable.vae_decode(xt[i].unsqueeze(0)))
             x0_dec = torch.cat(x0_dec, dim=0)
-        # x0_dec = ldm_stable.vae.decode(1 / ldm_stable.vae.config.scaling_factor * w0).sample
-    if x0_dec.dim() < 4:
-        x0_dec = x0_dec[None, :, :, :]
 
-    with torch.no_grad():
-        audio = ldm_stable.decode_to_mel(x0_dec)
+            if 'stable-audio' not in extraction_args.model_id:
+                if x0_dec.dim() < 4:
+                    x0_dec = x0_dec[None, :, :, :]
+
+                audio = ldm_stable.decode_to_mel(x0_dec)
+            else:
+                # decoded audio in stable-audio is already waveform
+                audio = x0_dec.detach().clone().cpu().squeeze(0)
+                x0_dec = []
+                for i in range(len(xt)):
+                    x0_dec.append(get_spec(audio[i], ldm_stable.get_fn_STFT()))
+                x0_dec = torch.cat(x0_dec, dim=0)
+
+                if x0_dec.dim() < 4:
+                    x0_dec = x0_dec[None, :, :, :]
+
+    if x0_dec.shape[2] > x0_dec.shape[3]:
+        x0_dec = x0_dec.transpose(2, 3).cpu().detach().numpy()
+    else:
+        x0_dec = x0_dec.cpu().detach().numpy()
 
     if args.combine_evs:
         torchaudio.save(os.path.join(
@@ -222,11 +246,11 @@ if __name__ == "__main__":
             f'{"_RAND" if args.rand_v else ""}'
             # f'{"_diffeigval" if not args.use_cur_eigval else ""}'
             f'_a{args.amount}.wav'),
-                        audio, sample_rate=16000)
+                        audio, sample_rate=sr)
 
-        logging_dict = {'gen': wandb.Audio(audio.squeeze(), sample_rate=16000,
+        logging_dict = {'gen': wandb.Audio(audio.squeeze(), sample_rate=sr,
                                            caption=f'pcs{"".join([str(x) for x in args.evs])}_{run_name}'),
-                        'gen_spec': wandb.Image(x0_dec[0, 0].T.cpu().detach().numpy(),
+                        'gen_spec': wandb.Image(x0_dec[0, 0],
                                                 caption=f'pcs{"".join([str(x) for x in args.evs])}_{run_name}')}
         wandb.log(logging_dict)
     else:
@@ -244,11 +268,11 @@ if __name__ == "__main__":
                 f'{"_avgeval" if args.evals_pt is not None else ""}'
                 f'{"_RAND" if args.rand_v else ""}'
                 f'_a{args.amount}.wav'),
-                            audio[ev_idx].unsqueeze(0), sample_rate=16000)
+                            audio[ev_idx].unsqueeze(0), sample_rate=sr)
 
-            logging_dict = {'gen': wandb.Audio(audio[ev_idx].squeeze(), sample_rate=16000,
+            logging_dict = {'gen': wandb.Audio(audio[ev_idx].squeeze(), sample_rate=sr,
                                                caption=f'pc{ev_num}_' + run_name),
-                            'gen_spec': wandb.Image(x0_dec[ev_idx, 0].T.cpu().detach().numpy(),
+                            'gen_spec': wandb.Image(x0_dec[ev_idx, 0],
                                                     caption=f'pc{ev_num}_' + run_name)}
             wandb.log(logging_dict)
     wandb_run.finish()

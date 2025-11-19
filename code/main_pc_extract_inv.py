@@ -12,7 +12,9 @@ import wandb
 from ddm_inversion.inversion_utils import inversion_forward_process
 from models import load_model
 from pc_drift import forward_directional, PCStreamChoice, get_eigenvectors
-from utils import plot_corrs, set_reproducability, get_text_embeddings, load_audio
+from utils import plot_corrs, set_reproducability, get_text_embeddings, load_audio, get_spec
+
+HF_TOKEN = None  # Needed for stable audio open. You can leave None when not using it
 
 
 if __name__ == "__main__":
@@ -25,8 +27,9 @@ if __name__ == "__main__":
                                                          "cvssp/audioldm2",
                                                          "cvssp/audioldm2-large",
                                                          "cvssp/audioldm2-music",
-                                                         'declare-lab/tango-full-ft-audio-music-caps',
-                                                         'declare-lab/tango-full-ft-audiocaps'],
+                                                         "declare-lab/tango-full-ft-audio-music-caps",
+                                                         "declare-lab/tango-full-ft-audiocaps",
+                                                         ],
                         default="cvssp/audioldm2-music", help='Audio diffusion model to use')
 
     parser.add_argument("--init_aud", type=str, required=True, help='Audio to invert and extract PCs from')
@@ -57,16 +60,18 @@ if __name__ == "__main__":
 
     parser.add_argument('--wandb_name', type=str, default=None)
     parser.add_argument('--wandb_group', type=str, default=None)
-    parser.add_argument('--wandb_disable', action='store_true')
+    parser.add_argument('--wandb_disable', action='store_true', default=True)
 
     args = parser.parse_args()
 
-    # parser.add_argument('--pc_mode', type=str, choices=['both', 'text', 'uncond'], default='both')
     args.pc_mode = 'both'
     args.eta = 1.
     args.numerical_fix = True
     args.double_precision = False
     args.test_rand_gen = False
+
+    if args.model_id == "stabilityai/stable-audio-open-1.0" and HF_TOKEN is None:
+        raise ValueError("HF_TOKEN is required for stable audio model")
 
     set_reproducability(args.seed)
 
@@ -77,9 +82,6 @@ if __name__ == "__main__":
         f'pc-{args.pc_mode}_cfgd{args.cfg_tar}_' + \
         f'drift{args.drift_start}-{args.drift_end}_it{args.iters}_c{args.const:.1e}' + \
         f'{"_dp" if args.double_precision else ""}_{time_stamp_name}'
-    #  image_name_png = f'cfg_e_{"-".join([str(x) for x in cfg_scale_src])}_' + \
-    #     f'cfg_d_{"-".join([str(x) for x in cfg_scale_tar])}_' + \
-    #     f'skip_{"-".join([str(x) for x in args.skip.numpy()])}_{time_stamp_name}'
     args.image_name_png = image_name_png
 
     wandb.login()
@@ -95,8 +97,7 @@ if __name__ == "__main__":
     torch.cuda.set_device(args.device_num)
 
     # Load and set up model
-    # ldm_stable, controller = load_model(args.model_id, device, args.num_diffusion_steps, args.double_precision)
-    ldm_stable = load_model(args.model_id, device, args.num_diffusion_steps, args.double_precision)
+    ldm_stable = load_model(args.model_id, device, args.num_diffusion_steps, args.double_precision, token=HF_TOKEN)
     timesteps = ldm_stable.model.scheduler.timesteps
 
     if args.drift_start is None:
@@ -107,37 +108,21 @@ if __name__ == "__main__":
     drift_start_it = args.num_diffusion_steps - args.drift_start  # 80 = 200 - 120
     drift_end_it = args.num_diffusion_steps - args.drift_end  # 140 = 200 - 60
 
-    x0 = load_audio(args.init_aud, ldm_stable.get_fn_STFT(), device=device)
+    x0, sr, duration = load_audio(args.init_aud, ldm_stable.get_fn_STFT(), device=device,
+                                  stft=('stable-audio' not in args.model_id), model_sr=ldm_stable.get_sr())
     with inference_mode():
         w0 = ldm_stable.vae_encode(x0)
 
     torch.cuda.empty_cache()
-    # 0. Convert audio input length from seconds to spectrogram height
-    # height = get_height_of_spectrogram(args.length, ldm_stable)
-
-    # Get all noises now
-    # batch_size = 1
     text_embeddings_class_labels, text_emb, uncond_emb = get_text_embeddings(
         args.source_prompt, args.target_neg_prompt, ldm_stable)
 
-    # latents = []
-    # for _ in range(len(timesteps) + 1):
-    #     latents.append(ldm_stable.model.prepare_latents(
-    #         batch_size,
-    #         ldm_stable.model.unet.config.in_channels,
-    #         height,
-    #         text_embeddings_class_labels.dtype,
-    #         device,
-    #         None, None
-    #     ))
-
     # find Zs and wts - forward process
-    _, zs, wts, _ = inversion_forward_process(ldm_stable, w0, etas=args.eta,
-                                              prompts=args.source_prompt, cfg_scales=[args.cfg_tar],
-                                              prog_bar=True,
-                                              num_inference_steps=args.num_diffusion_steps,
-                                              # cutoff_points=args.cutoff_points,
-                                              numerical_fix=args.numerical_fix)
+    _, zs, wts, extra_info = inversion_forward_process(ldm_stable, w0, etas=args.eta,
+                                                       prompts=args.source_prompt, cfg_scales=[args.cfg_tar],
+                                                       prog_bar=True,
+                                                       num_inference_steps=args.num_diffusion_steps,
+                                                       numerical_fix=args.numerical_fix, duration=duration)
 
     wts = wts.flip(0)
     latents = [wts[0].unsqueeze(0), *[z.unsqueeze(0) for z in zs.flip(0)]]
@@ -243,13 +228,16 @@ if __name__ == "__main__":
         xts.append(xt.detach().clone())
 
         if it % 10 == 0:
-            torch.save({'eigdata': eigdata, 'args': args, 'corrs': corrs,
+            torch.save({'eigdata': eigdata, 'args': args,
+                        'extra_info': extra_info, 'duration': duration,
+                        'corrs': corrs,
                         'in_corrs': in_corrs, 'latents': latents,
                         'in_norms': in_norms,
                         'xts': xts},
                        os.path.join(save_path, image_name_png + ".pt"))
 
     torch.save({'eigdata': eigdata, 'args': args, 'corrs': corrs,
+                'extra_info': extra_info, 'duration': duration,
                 'in_corrs': in_corrs, 'latents': latents,
                 'in_norms': in_norms,
                 'xts': xts},
@@ -265,23 +253,41 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
 
     with inference_mode():
-        x0_dec = ldm_stable.vae_decode(xt)
-        # x0_dec = ldm_stable.vae.decode(1 / ldm_stable.vae.config.scaling_factor * w0).sample
-    if x0_dec.dim() < 4:
-        x0_dec = x0_dec[None, :, :, :]
+        with torch.no_grad():
+            x0_dec = ldm_stable.vae_decode(xt)
 
-    with torch.no_grad():
-        audio = ldm_stable.decode_to_mel(x0_dec)
-        orig_audio = ldm_stable.decode_to_mel(x0)
+            if 'stable-audio' not in args.model_id:
+                if x0_dec.dim() < 4:
+                    x0_dec = x0_dec[None, :, :, :]
 
-    plt.imsave(save_full_path_spec, x0_dec[0, 0].T.cpu().detach().numpy())
-    torchaudio.save(save_full_path_wave, audio, sample_rate=16000)
-    torchaudio.save(save_full_path_origwave, orig_audio, sample_rate=16000)
+                audio = ldm_stable.decode_to_mel(x0_dec)
+                orig_audio = ldm_stable.decode_to_mel(x0)
+            else:
+                # decoded audio in stable-audio is already waveform
+                audio = x0_dec.detach().clone().cpu().squeeze(0)
+                orig_audio = x0.detach().clone().cpu()
+                x0_dec = get_spec(x0_dec, ldm_stable.get_fn_STFT())
+                x0 = get_spec(x0.unsqueeze(0), ldm_stable.get_fn_STFT())
 
-    logging_dict = {'orig': wandb.Audio(orig_audio.squeeze(), caption='orig', sample_rate=16000),
-                    'orig_spec': wandb.Image(x0[0, 0].T.cpu().detach().numpy(), caption='orig'),
-                    'gen': wandb.Audio(audio.squeeze(), caption=image_name_png, sample_rate=16000),
-                    'gen_spec': wandb.Image(x0_dec[0, 0].T.cpu().detach().numpy(), caption=image_name_png)}
+                if x0_dec.dim() < 4:
+                    x0_dec = x0_dec[None, :, :, :]
+                    x0 = x0[None, :, :, :]
+
+    if x0_dec.shape[2] > x0_dec.shape[3]:
+        x0_dec = x0_dec[0, 0].T.cpu().detach().numpy()
+        x0 = x0[0, 0].T.cpu().detach().numpy()
+    else:
+        x0_dec = x0_dec[0, 0].cpu().detach().numpy()
+        x0 = x0[0, 0].cpu().detach().numpy()
+
+    plt.imsave(save_full_path_spec, x0_dec)
+    torchaudio.save(save_full_path_wave, audio, sample_rate=sr)
+    torchaudio.save(save_full_path_origwave, orig_audio, sample_rate=sr)
+
+    logging_dict = {'orig': wandb.Audio(orig_audio.squeeze(), caption='orig', sample_rate=sr),
+                    'orig_spec': wandb.Image(x0, caption='orig'),
+                    'gen': wandb.Audio(audio.squeeze(), caption=image_name_png, sample_rate=sr),
+                    'gen_spec': wandb.Image(x0_dec, caption=image_name_png)}
 
     if not args.dry:  # Only log if full run
         print('[+] Logging correlations')
