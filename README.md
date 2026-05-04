@@ -21,6 +21,7 @@ This repository contains the official code release for ***Zero-Shot Unsupervised
 - [Usage Example](#usage-example)
   - [Text-Based Editing](#text-based-editing)
   - [Unsupervised Editing](#unsupervised-editing)
+  - [Music Remixing](#music-remixing)
   - [SDEdit](#sdedit)
 - [Evaluation](#evaluation)
 - [MedleyMDPrompts](#medleymdprompts)
@@ -29,7 +30,7 @@ This repository contains the official code release for ***Zero-Shot Unsupervised
 
 ## Change Log
 
-**2025-05-04**: Updated to support Python 3.12+, added Google Colab demo notebook.
+**2025-05-04**: Updated to support Python 3.12+, added Google Colab demo notebook, added music remixing support with three modes: style transfer, latent blend, and temporal mix.
 
 **2024-10-12**: Added support for text-based editing using [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0)!
 
@@ -108,6 +109,43 @@ CUDA_VISIBLE_DEVICES=<gpu_num> python main_run_sdedit.py --cfg_tar <target_cfg_s
 Use `python main_run_sdedit.py --help` for all options.
 
 Image samples can be recreated using `images_run_sdedit.py`.
+
+### Music Remixing
+
+Three remix modes are available via `main_remix.py`:
+
+**Style Transfer** — Keep the structure of source A, apply a new style via text prompt:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python main_remix.py \
+    --mode style_transfer \
+    --source_a <input_audio.wav> \
+    --source_prompt "a rock song" \
+    --target_prompt "a jazz version with saxophone" \
+    --cfg_tar 12 --tstart 100 --model_id cvssp/audioldm2-music
+```
+
+**Latent Blend** — Mix two audio sources in the latent space with a controllable ratio (`--blend_ratio` 0=all A, 1=all B):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python main_remix.py \
+    --mode latent_blend \
+    --source_a <song_a.wav> --source_b <song_b.wav> \
+    --blend_ratio 0.5 --model_id cvssp/audioldm2-music
+```
+
+**Temporal Mix** — Seamlessly transition between two styles within a single track (`--mix_point` controls the transition point, 0-1):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python main_remix.py \
+    --mode temporal \
+    --source_a <input_audio.wav> \
+    --source_prompt "a calm piano piece" \
+    --target_prompt "energetic electronic dance music" \
+    --mix_point 0.5 --cfg_tar 12 --tstart 100 --model_id cvssp/audioldm2-music
+```
+
+Use `python main_remix.py --help` for all options. A remix demo is also available in the [Colab notebook](https://colab.research.google.com/github/BF667/AudioEditing/blob/main/AudioEditing_Demo.ipynb).
 
 ## Evaluation
 
