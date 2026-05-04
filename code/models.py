@@ -411,11 +411,11 @@ class TangoWrapper(PipelineWrapper):
         self.stft = TangoTacotronSTFT(**stft_config)
         self.model = TangoAudioDiffusion(**main_config).to(self.device)
 
-        vae_weights = torch.load("{}/pytorch_model_vae.bin".format(path), map_location=self.device)
-        stft_weights = torch.load("{}/pytorch_model_stft.bin".format(path), map_location=torch.device('cpu'))
+        vae_weights = torch.load("{}/pytorch_model_vae.bin".format(path), map_location=self.device, weights_only=False)
+        stft_weights = torch.load("{}/pytorch_model_stft.bin".format(path), map_location=torch.device('cpu'), weights_only=False)
         torch.cuda.empty_cache()
 
-        main_weights = torch.load("{}/pytorch_model_main.bin".format(path), map_location=self.device)
+        main_weights = torch.load("{}/pytorch_model_main.bin".format(path), map_location=self.device, weights_only=False)
 
         self.vae.load_state_dict(vae_weights)
         self.stft.load_state_dict(stft_weights)
