@@ -1,18 +1,15 @@
-[![Python 3.8.10](https://img.shields.io/badge/python-3.8.10+-blue?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3810/)
-[![NumPy](https://img.shields.io/badge/numpy-1.23.5-green?logo=numpy&logoColor=white)](https://pypi.org/project/numpy/1.23.5/)
-[![Matplotlib](https://img.shields.io/badge/matplotlib-3.7.1+-green?logo=plotly&logoColor=white)](https://pypi.org/project/matplotlib/3.7.1)
-[![Notebook](https://img.shields.io/badge/notebook-7.0.6+-green?logo=jupyter&logoColor=white)](https://pypi.org/project/notebook/7.0.6)
-[![torch](https://img.shields.io/badge/torch-2.0.0-green?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![torchaudio](https://img.shields.io/badge/torchaudio-2.0.1-green?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![diffusers](https://img.shields.io/badge/diffusers-0.22.0-green)](https://github.com/huggingface/diffusers/)
-[![transformers](https://img.shields.io/badge/transformers-1.35.0-green)](https://github.com/huggingface/transformers/)
+[![Python 3.12](https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![torch](https://img.shields.io/badge/torch-2.2+-green?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![diffusers](https://img.shields.io/badge/diffusers-0.30+-green)](https://github.com/huggingface/diffusers/)
+[![transformers](https://img.shields.io/badge/transformers-4.40+-green)](https://github.com/huggingface/transformers/)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BF667/AudioEditing/blob/main/AudioEditing_Demo.ipynb)
 [![CC BY-SA 4.0][cc-by-sa-shield]][cc-by-sa]
 [![CC BY 4.0][cc-by-shield]][cc-by]
 
 <!-- omit in toc -->
 # Zero-Shot Unsupervised and Text-Based Audio Editing Using DDPM Inversion [ICML 2024]
 
-### [Project page](https://HilaManor.github.io/AudioEditing) | [Arxiv](https://arxiv.org/abs/2402.10009) | [Text-Based Space](https://huggingface.co/spaces/hilamanor/audioEditing)
+### [Project page](https://HilaManor.github.io/AudioEditing) | [Arxiv](https://arxiv.org/abs/2402.10009) | [Text-Based Space](https://huggingface.co/spaces/hilamanor/audioEditing) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BF667/AudioEditing/blob/main/AudioEditing_Demo.ipynb)
 
 This repository contains the official code release for ***Zero-Shot Unsupervised and Text-Based Audio Editing Using DDPM Inversion***.
 
@@ -32,6 +29,8 @@ This repository contains the official code release for ***Zero-Shot Unsupervised
 
 ## Change Log
 
+**2025-05-04**: Updated to support Python 3.12+, added Google Colab demo notebook.
+
 **2024-10-12**: Added support for text-based editing using [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0)!
 
 - Wasn't trained only on music, so results might vary. You can change the loaded checkpoint to finetuned models on music in `models.py:StableAudWrapper`.
@@ -41,9 +40,16 @@ This repository contains the official code release for ***Zero-Shot Unsupervised
 
 **2024-09-09**: Added a wrapper for a face-images unconditional LDM model (trained on CelebAHQ), relevant for unsupervised editing. Additionally, moved to PyTorch >= 2.2, Diffusers >= 0.26 to accommodate security concerns. The version tested in the paper is still reachable in the `paper_code` branch.
 
-## Requirements
+## Quick Start
+
+### Try it on Google Colab
+
+Click the badge above to open the demo notebook in Colab. It provides a step-by-step guide for both text-based and unsupervised audio editing.
+
+### Local Installation
 
 ```bash
+# Python 3.12+
 python -m pip install -r requirements.txt
 ```
 
