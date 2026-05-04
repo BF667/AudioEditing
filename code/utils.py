@@ -57,12 +57,27 @@ def load_audio(audio_path: str, fn_STFT, left: int = 0, right: int = 0, device: 
             import audioldm
             import audioldm.audio
 
+            # Convert MP3 to WAV temp file if needed (audioldm may not support MP3 directly)
+            _tmp_path = None
+            if audio_path.lower().endswith('.mp3'):
+                _tmp_path = audio_path + '.tmp.wav'
+                wav_tmp, sr_tmp = torchaudio.load(audio_path)
+                if sr_tmp != 16000:
+                    wav_tmp = torchaudio.functional.resample(wav_tmp, orig_freq=sr_tmp, new_freq=16000)
+                torchaudio.save(_tmp_path, wav_tmp, sample_rate=16000)
+                audio_path = _tmp_path
+
             duration = audioldm.utils.get_duration(audio_path)
 
             mel, _, wav = audioldm.audio.wav_to_fbank(audio_path, target_length=int(duration * 102.4), fn_STFT=fn_STFT)
             mel = mel.unsqueeze(0)
+
+            # Clean up temp file
+            if _tmp_path and os.path.exists(_tmp_path):
+                os.remove(_tmp_path)
         else:
             mel = audio_path
+            duration = mel.shape[-1] / 102.4  # fallback estimate
 
         c, h, w = mel.shape
         left = min(left, w-1)
@@ -75,6 +90,7 @@ def load_audio(audio_path: str, fn_STFT, left: int = 0, right: int = 0, device: 
 
         return mel, model_sr, duration
     else:
+        # torchaudio.load supports WAV, MP3, FLAC, OGG (via soundfile/sox backend)
         waveform, sr = torchaudio.load(audio_path)
         if sr != model_sr:
             waveform = torchaudio.functional.resample(waveform, orig_freq=sr, new_freq=model_sr)

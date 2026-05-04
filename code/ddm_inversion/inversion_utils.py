@@ -68,11 +68,16 @@ def inversion_forward_process(model: PipelineWrapper,
         t_to_idx = {int(v): k for k, v in enumerate(timesteps)}
     elif timesteps[0].dtype == torch.float32:
         t_to_idx = {float(v): k for k, v in enumerate(timesteps)}
+    else:
+        # Handle float64 (DPM-Solver) and other dtypes
+        t_to_idx = {v.item(): k for k, v in enumerate(timesteps)}
     xt = x0
     op = tqdm(timesteps) if prog_bar else timesteps
     model.setup_extra_inputs(xt, init_timestep=timesteps[0], audio_end_in_s=duration)
+    _ts_dtype = timesteps[0].dtype
     for t in op:
-        idx = num_inference_steps - t_to_idx[int(t) if timesteps[0].dtype == torch.int64 else float(t)] - 1
+        t_key = int(t) if _ts_dtype == torch.int64 else float(t) if _ts_dtype == torch.float32 else t.item()
+        idx = num_inference_steps - t_to_idx[t_key] - 1
 
         # 1. predict noise residual
         xt = xts[idx+1][None]
@@ -214,13 +219,16 @@ def inversion_reverse_process(model: PipelineWrapper,
         t_to_idx = {int(v): k for k, v in enumerate(timesteps[-zs.shape[0]:])}
     elif timesteps[0].dtype == torch.float32:
         t_to_idx = {float(v): k for k, v in enumerate(timesteps[-zs.shape[0]:])}
+    else:
+        t_to_idx = {v.item(): k for k, v in enumerate(timesteps[-zs.shape[0]:])}
+    _ts_dtype = timesteps[0].dtype
     hspaces = []
     skipconns = []
     model.setup_extra_inputs(xt, extra_info=extra_info, init_timestep=timesteps[-zs.shape[0]], audio_end_in_s=duration)
 
     for it, t in enumerate(op):
-        idx = model.model.scheduler.num_inference_steps - t_to_idx[
-            int(t) if timesteps[0].dtype == torch.int64 else float(t)] - \
+        t_key = int(t) if _ts_dtype == torch.int64 else float(t) if _ts_dtype == torch.float32 else t.item()
+        idx = model.model.scheduler.num_inference_steps - t_to_idx[t_key] - \
                 (model.model.scheduler.num_inference_steps - zs.shape[0] + 1)
 
         xt_inp = model.model.scheduler.scale_model_input(xt, t)

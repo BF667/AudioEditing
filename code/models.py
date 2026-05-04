@@ -6,9 +6,27 @@ from diffusers import AudioLDMPipeline, AudioLDM2Pipeline, StableDiffusionPipeli
 from transformers import RobertaTokenizer, RobertaTokenizerFast
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
 from diffusers.models.embeddings import get_1d_rotary_pos_embed
+from transformers.utils import ModelOutput as TransformersModelOutput
 import os
 import json
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+
+def _ensure_tensor(x):
+    """Safely extract a tensor from ModelOutput objects (newer diffusers/transformers compat)."""
+    if isinstance(x, torch.Tensor):
+        return x
+    if hasattr(x, 'sample'):
+        return x.sample
+    if hasattr(x, 'last_hidden_state'):
+        return x.last_hidden_state
+    if hasattr(x, 'hidden_states') and isinstance(x.hidden_states, torch.Tensor):
+        return x.hidden_states
+    if hasattr(x, 'to_tuple'):
+        tup = x.to_tuple()
+        if len(tup) == 1 and isinstance(tup[0], torch.Tensor):
+            return tup[0]
+    raise TypeError(f"Cannot extract tensor from {type(x)}. Expected torch.Tensor or ModelOutput with .sample/.last_hidden_state.")
 
 
 class PipelineWrapper(torch.nn.Module):
@@ -674,6 +692,10 @@ class AudioLDM2Wrapper(PipelineWrapper):
         )
         generated_prompt_embeds = generated_prompt_embeds.to(dtype=self.model.language_model.dtype, device=self.device)
 
+        # Ensure tensors (not ModelOutput) for cross-attention compatibility
+        generated_prompt_embeds = _ensure_tensor(generated_prompt_embeds)
+        prompt_embeds = _ensure_tensor(prompt_embeds)
+
         return generated_prompt_embeds, prompt_embeds, attention_mask
 
     def get_variance(self, timestep: torch.Tensor, prev_timestep: torch.Tensor) -> torch.Tensor:
@@ -1081,12 +1103,14 @@ class StableAudWrapper(PipelineWrapper):
 
         self.model.text_encoder.eval()
         with torch.no_grad():
-            prompt_embeds = self.model.text_encoder(text_input_ids, attention_mask=attention_mask)[0]
+            text_enc_out = self.model.text_encoder(text_input_ids, attention_mask=attention_mask)
+            prompt_embeds = _ensure_tensor(text_enc_out[0]) if not isinstance(text_enc_out, torch.Tensor) else text_enc_out
 
         if negative and attention_mask is not None:  # set the masked tokens to the null embed
             prompt_embeds = torch.where(attention_mask.to(torch.bool).unsqueeze(2), prompt_embeds, 0.0)
 
-        prompt_embeds = self.model.projection_model(text_hidden_states=prompt_embeds).text_hidden_states
+        proj_out = self.model.projection_model(text_hidden_states=prompt_embeds)
+        prompt_embeds = proj_out.text_hidden_states if hasattr(proj_out, 'text_hidden_states') else _ensure_tensor(proj_out)
 
         if attention_mask is None:
             raise NotImplementedError("Shouldn't reach here. Please raise an issue if you do.")

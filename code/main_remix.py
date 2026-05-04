@@ -231,21 +231,29 @@ def save_results(ldm_stable, w0_remix, w0_orig, sr, args):
         spec = x0_dec[0, 0].cpu().detach().numpy()
 
     plt.imsave(os.path.join(save_path, image_name + ".png"), spec)
-    torchaudio.save(os.path.join(save_path, image_name + ".wav"), audio, sample_rate=sr)
-    torchaudio.save(os.path.join(save_path, "orig.wav"), orig_audio, sample_rate=sr)
+
+    # Determine output format from source extension or args
+    out_ext = ".wav"
+    if hasattr(args, 'output_format') and args.output_format:
+        out_ext = f".{args.output_format}"
+    elif args.source_a and args.source_a.lower().endswith('.mp3'):
+        out_ext = ".mp3"
+
+    torchaudio.save(os.path.join(save_path, image_name + out_ext), audio, sample_rate=sr, format=out_ext[1:])
+    torchaudio.save(os.path.join(save_path, "orig" + out_ext), orig_audio, sample_rate=sr, format=out_ext[1:])
 
     # Save source B if provided
     if args.source_b and os.path.exists(args.source_b):
         wav_b, sr_b = torchaudio.load(args.source_b)
         if sr_b != sr:
             wav_b = torchaudio.functional.resample(wav_b, orig_freq=sr_b, new_freq=sr)
-        torchaudio.save(os.path.join(save_path, "source_b.wav"), wav_b, sample_rate=sr)
+        torchaudio.save(os.path.join(save_path, "source_b" + out_ext), wav_b, sample_rate=sr, format=out_ext[1:])
 
     print(f"\nResults saved to: {save_path}")
-    print(f"  - {image_name}.wav  (remix)")
-    print(f"  - orig.wav  (source A)")
+    print(f"  - {image_name}{out_ext}  (remix)")
+    print(f"  - orig{out_ext}  (source A)")
     if args.source_b:
-        print(f"  - source_b.wav  (source B)")
+        print(f"  - source_b{out_ext}  (source B)")
 
     # Wandb logging
     if not args.wandb_disable:
@@ -318,6 +326,9 @@ if __name__ == "__main__":
 
     # Output
     parser.add_argument("--results_path", type=str, default="remix_results")
+    parser.add_argument("--output_format", type=str, default="wav",
+                        choices=["wav", "mp3"],
+                        help='Output audio format (default: same as source, or wav)')
     parser.add_argument('--wandb_name', type=str, default=None)
     parser.add_argument('--wandb_group', type=str, default=None)
     parser.add_argument('--wandb_disable', action='store_true', default=True)
